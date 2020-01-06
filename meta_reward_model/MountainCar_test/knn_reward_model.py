@@ -8,8 +8,9 @@ class KNN_Predict:
         self.count = 0
         self.minus_stepnum = 999
         self.K = 3
-        self.newmax = False  # 当出现新的最大值，就把agent的随机率加大
-        self.subindex = 0 # 记录当前相似的数据点在哪里
+        self.suptrain = False  # 当出现新的最大值，就把agent的随机率加大
+        self.subindex = [] # 记录被选中的数据条
+        self.num_maml = 5
 
     def memory_in(self, data):
         if(self.count >= self.memory_size):
@@ -24,43 +25,53 @@ class KNN_Predict:
             for x in memory:
                 reward_for_memory.append(x[-1])
             index = np.argmin(reward_for_memory)
+            max_i = np.argmax(reward_for_memory)
             data_r = data[-1]
             if(reward_for_memory[index] <= data_r):
                 # print(data_r, reward_for_memory[index])
                 self.memory[index] = data
                 self.minus_stepnum = len(self.memory[0]) - 1
                 for index in self.memory:
-                    if(len(index) < self.minus_stepnum):
+                    if(len(index) - 1 < self.minus_stepnum):
                         self.minus_stepnum = len(index) - 1
+            if(reward_for_memory[max_i] <= data_r):
+                self.newmax = True
+                self.subindex = index
         else:
             self.memory.append(data)
             self.count += 1
-            if(len(data) < self.minus_stepnum):
+            if(len(data) - 1 < self.minus_stepnum):
                 self.minus_stepnum = len(data) - 1
 
         # print('knn memory size', len(self.memory))
+    def maml(self):
+        memory = np.array(self.memory)
+        for x in memory:
+            reward_for_memory.append(x[-1])
+        for i in range(self.num_maml):
+            index = np.argmax(reward_for_memory)
+            if index not in self.subindex:
+                self.subindex.append(index)
+            else:
+                self.subindex.append(np.random.randint(0, self.memory_size))
+            reward_for_memory[index] = np.min(reward_for_memory)
+        self.suptrain = True
 
     def predict(self, step_nums, data):
-        # if(self.count >= self.memory_size):
-        memory = np.array(self.memory)
-        # memory_step = memory[:, :step_nums] - data + 0.1
+        memory = self.memory
         memory_step = []
         memory_reward = []
-        # print(step_nums, x[:step_nums])
         for x in memory:
-            # print(x[-1], x[:step_nums - 1])
             memory_reward.append(x[-1])
-            memory_step.append(x[:step_nums+1])
-        # print(memory_step, memory_reward, data[-1])
-        memory_step = np.array(memory_step) - np.array(data) + 0.001
-        #先求Pn
+            memory_step.append(np.array(x[:step_nums+1]) - np.array(data) + 0.001)
         # print(memory_step)
+        # memory_step = np.array(memory_step) - np.array(data) + 0.001
         distance = np.array(memory_step)**2
+        distance = distance.sum(2)
         distance = distance.sum(1)
         distance = distance / distance.sum()
         dis_step = 1 / distance
         dis_step = dis_step / dis_step.sum()
-        self.subindex = np.argmax(dis_step)
         #再求Xn
         max_r = np.max(memory_reward)
         min_r = np.min(memory_reward)
@@ -73,14 +84,16 @@ class KNN_Predict:
         return np.exp(res) - np.exp(0.5)
 
     def predict_modified(self, step_nums, data):
-        memory = np.array(self.memory)
+        memory = self.memory
         memory_step = []
         memory_reward = []
         for x in memory:
             memory_reward.append(x[-1])
-            memory_step.append(x[:step_nums+1])
-        memory_step = np.array(memory_step) - np.array(data) + 0.001
+            memory_step.append(np.array(x[:step_nums+1]) - np.array(data) + 0.001)
+        # print(memory_step)
+        # memory_step = np.array(memory_step) - np.array(data) + 0.001
         distance = np.array(memory_step)**2
+        distance = distance.sum(2)
         distance = distance.sum(1)
         distance = distance / distance.sum()
         dis_step = 1 / distance
@@ -91,9 +104,9 @@ class KNN_Predict:
         close_reward = []
         close_record = []
 
-        close_reward.append(memory_reward[np.argmax(memory_reward)])
-        close_record.append(memory_step[np.argmax(memory_reward)])
-        for i in range(4):
+        # close_reward.append(memory_reward[np.argmax(memory_reward)])
+        # close_record.append(memory_step[np.argmax(memory_reward)])
+        for i in range(20):
             index = np.argmax(dis_step)
             close_reward.append(memory_reward[index])
             close_record.append(dis_step[index])
@@ -101,7 +114,7 @@ class KNN_Predict:
 
         r_step = (close_reward - min_reward + 1e-8) / (max_reward - min_reward + 1e-8)
         close_record = np.array(close_record)
-        close_record = close_record.reshape(5, 1)
+        close_record = close_record.reshape(20, 1)
 
         res = np.dot(r_step, close_record)
         res = round(res[0], 4)
@@ -114,7 +127,7 @@ class KNN_Predict:
         for x in memory:
             memory_reward.append(x[-1])
             memory_step.append(x[:-1])
-        index = np.argmax(np.array(memory_reward))
+        # index = np.argmax(np.array(memory_reward))
         index = self.subindex
         # print(memory_step[index][step_nums])
         return int(memory_step[index][step_nums])

@@ -36,24 +36,34 @@ with tf.variable_scope('dueling_DQN'):
         e_greedy_increment=0.00005, sess=sess, dueling=True, output_graph=False
     )
 
-knn = KNN_Predict(8) #best for 3
+knn = KNN_Predict(20) #best for 3
 sess.run(tf.global_variables_initializer())
 x = []
-
+def onehot(action):
+    if(action == 0):
+        return [1,0,0]
+    if(action == 1):
+        return [0,1,0]
+    if(action == 2):
+        return [0,0,1]
 def train(RL, model=False):
     total_steps = 0
     steps = []
     episodes = []
-    for i_episode in tqdm(range(200)):
+    # if knn.newmax:
+    #     RL.epsilon = 0
+    for i_episode in tqdm(range(500)):
         observation = env.reset()
         t = 0
         sc = 0
         record = []
+        # if i_episode % 100 == 0:
+        #     knn.maml()
         while True:
             # env.render()
-
             action = RL.choose_action(observation, knn, t)
-            record.append(action)
+            # print(action, onehot(action))
+            record.append(onehot(action))
             observation_, reward, done, info = env.step(action)
             # print(RL.qtarget_value(observation_))
             # position, velocity = observation_
@@ -62,15 +72,16 @@ def train(RL, model=False):
             # my research
             if model:
                 if(knn.memory_size <= knn.count):
-                    if(t < knn.minus_stepnum and t >=5):
+                    if(t < knn.minus_stepnum - 1 and t >= 10):
                         # print('reward model')
                         po_s = 0.9*RL.qtarget_value(observation_) - RL.qeval_value(observation)
-                        reward += -knn.predict(t, record) - po_s
+                        reward += -1*knn.predict_modified(t, record) - 1*po_s
             # PBRS
             # if(i_episode > 40):
-            # reward += (0.9*RL.qtarget_value(observation_) - RL.qeval_value(observation))
+            # reward += -(0.9*RL.qtarget_value(observation_) - RL.qeval_value(observation))
 
-            if done: reward = 5
+            if done: reward = 10
+            # reward += -(0.9*RL.qtarget_value(observation_) - RL.qeval_value(observation))
 
             RL.store_transition(observation, action, reward, observation_)
 
@@ -100,7 +111,7 @@ test_model = train(RL_natural, model=True)
 print(np.min(x))
 # test_model = train(RL_dueling)
 
-# np.save('normal_dqn_500', test_model[1, :] - test_model[1, 0])
+# np.save('777', test_model[1, :] - test_model[1, 0])
 
 # x = [     0,  29943,  40541,  43858,  46815,  49193,  49832,  54098,  61024,  63578,
 #   66517,  69013,  72690,  75689,  77382,  84137,  88604,  90779,  96911,  98781,
