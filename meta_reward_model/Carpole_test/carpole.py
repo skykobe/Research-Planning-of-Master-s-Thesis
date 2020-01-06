@@ -8,7 +8,7 @@ np.random.seed(2)
 tf.set_random_seed(2)
 
 OUTPUT_GRAPH = False
-MAX_EPISODE = 4000
+MAX_EPISODE = 1000
 DISPLAY_REWARD_THRESHOLD = 200  # renders environment if total episode reward is greater then this threshold
 MAX_EP_STEPS = 200   # maximum time step in one episode
 RENDER = False  # rendering wastes time
@@ -26,43 +26,12 @@ N_A = env.action_space.n
 
 import numpy as np
 
-class meta_td:
-    def __init__(self, value):
-        self.x = 1
-        self.meta_paramter = 1/value
-        self.error_set = 0
-        self.count = 0
-        self.cache = 100
+def onehot(action):
+    if(action == 0):
+        return [1,0]
+    if(action == 1):
+        return [0,1]
 
-    def learning(self, error):
-        er = abs(error) * self.meta_paramter
-        self.x = (1 - self.meta_paramter) * self.x + er
-
-        lr = (2 / (1 + np.exp(-self.x/10))) - 1
-        gamma = (2 / (1 + np.exp(self.x)))
-        epsilon = np.exp(self.x) - 1
-
-        return round(lr, 4), round(gamma, 3), round(epsilon, 3)
-
-    def learning2(self, error):
-        if(self.count >= self.cache):
-            td_avg = self.error_set / self.cache
-            er = td_avg * self.meta_paramter
-            self.x = (1 - self.meta_paramter) * self.x + er
-
-            lr = (2 / (1 + np.exp(-self.x/10))) - 1
-            gamma = (2 / (1 + np.exp(self.x)))
-            epsilon = np.exp(self.x) - 1
-
-            self.count = 0
-            self.error_set = 0
-
-            return lr, gamma, epsilon, True
-
-        else:
-            self.error_set += abs(error)
-            self.count += 1
-            return 0, 0, 0, False
 
 class KNN_Predict:
     def __init__(self, size):
@@ -90,12 +59,12 @@ class KNN_Predict:
                 self.memory[index] = data
                 self.minus_stepnum = len(self.memory[1])-1
                 for index in self.memory:
-                    if(len(index) < self.minus_stepnum):
+                    if(len(index) - 1 < self.minus_stepnum):
                         self.minus_stepnum = len(index) - 1
         else:
             self.memory.append(data)
             self.count += 1
-            if(len(data) < self.minus_stepnum):
+            if(len(data) - 1 < self.minus_stepnum):
                 self.minus_stepnum = len(data) - 1
 
         # print('knn memory size', len(self.memory))
@@ -133,28 +102,41 @@ class KNN_Predict:
         return np.exp(res) - np.exp(0.5)
 
     def predict_modified(self, step_nums, data):
-        memory = np.array(self.memory)
+        memory = self.memory
         memory_step = []
         memory_reward = []
         for x in memory:
             memory_reward.append(x[-1])
-            memory_step.append(x[:step_nums+1])
-        memory_step = np.array(memory_step) - np.array(data)
+            memory_step.append(np.array(x[:step_nums+1]) - np.array(data) + 0.001)
+        # print(memory_step)
+        # memory_step = np.array(memory_step) - np.array(data) + 0.001
         distance = np.array(memory_step)**2
-#         distance = abs(memory_step)
+        distance = distance.sum(2)
         distance = distance.sum(1)
+        distance = distance / distance.sum()
+        dis_step = 1 / distance
+        dis_step = dis_step / dis_step.sum()
 
-        close_reward = memory_reward[np.argmin(distance)]
         min_reward = np.min(memory_reward)
         max_reward = np.max(memory_reward)
-        value = (close_reward - min_reward) / (max_reward - min_reward + 1e-4)
+        close_reward = []
+        close_record = []
 
-        if(value >=1):
-            value = 1
-        if(close_reward == max_reward):
-            value = 1
-#         print(value)
-        return np.exp(value)-np.exp(0.5)
+        # close_reward.append(memory_reward[np.argmax(memory_reward)])
+        # close_record.append(memory_step[np.argmax(memory_reward)])
+        for i in range(20):
+            index = np.argmax(dis_step)
+            close_reward.append(memory_reward[index])
+            close_record.append(dis_step[index])
+            dis_step[index] = -1
+
+        r_step = (close_reward - min_reward + 1e-8) / (max_reward - min_reward + 1e-8)
+        close_record = np.array(close_record)
+        close_record = close_record.reshape(20, 1)
+
+        res = np.dot(r_step, close_record)
+        res = round(res[0], 4)
+        return np.exp(res) - np.exp(0.5)
 
 class Actor(object):
     def __init__(self, sess, n_features, n_actions, lr=0.001):
@@ -175,7 +157,7 @@ class Actor(object):
         with tf.variable_scope('Actor'):
             l1 = tf.layers.dense(
                 inputs=self.s,
-                units=50,    # number of hidden units
+                units=20,    # number of hidden units
                 activation=tf.nn.relu,
                 kernel_initializer=tf.random_normal_initializer(0., .1),    # weights
                 bias_initializer=tf.constant_initializer(0.1),  # biases
@@ -185,7 +167,7 @@ class Actor(object):
             self.acts_prob = tf.layers.dense(
                 inputs=l1,
                 units=n_actions,    # output units
-                activation=tf.nn.sigmoid,   # get action probabilities
+                activation=tf.nn.softmax,   # get action probabilities
                 kernel_initializer=tf.random_normal_initializer(0., .1),  # weights
                 bias_initializer=tf.constant_initializer(0.1),  # biases
                 name='acts_prob'
@@ -231,9 +213,9 @@ class Actor(object):
         s = s[np.newaxis, :]
         # res, probs = self.sess.run([self.res, self.acts_prob], {self.s: s, self.epsilon: self.epsilon_v})
         probs = self.sess.run(self.acts_prob, {self.s: s})
-        res = self.boltzmann(probs[0], self.epsilon_v)
+        # res = self.boltzmann(probs[0], self.epsilon_v)
         # return np.random.choice(np.arange(probs.shape[1]), p=probs.ravel())   # return a int
-        return np.random.choice(np.arange(probs.shape[1]), p=res)   # return a int
+        return np.random.choice(np.arange(probs.shape[1]), p=probs[0])   # return a int
 
 
 class Critic(object):
@@ -253,7 +235,7 @@ class Critic(object):
         with tf.variable_scope('Critic'):
             l1 = tf.layers.dense(
                 inputs=self.s,
-                units=50,  # number of hidden units
+                units=20,  # number of hidden units
                 activation=tf.nn.relu,  # None
                 kernel_initializer=tf.random_normal_initializer(0., .1),  # weights
                 bias_initializer=tf.constant_initializer(0.1),  # biases
@@ -302,7 +284,7 @@ sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 
 actor = Actor(sess, n_features=N_F, n_actions=N_A)
 critic = Critic(sess, n_features=N_F)     # we need a good teacher, so the teacher should learn faster than the actor
-metar = meta_td(value=200)
+# metar = meta_td(value=200)
 knn = KNN_Predict(30)
 record = []
 step_record = []
@@ -318,6 +300,7 @@ success = False
 
 def trian():
     global running_reward_label, success, step_record
+    repeat = 0.8
     for i_episode in range(MAX_EPISODE):
         env.seed(2)
         s = env.reset()
@@ -325,25 +308,30 @@ def trian():
         track_r = []
         tmp = 0
         while True:
-            # env.render()
+            if i_episode > 990:
+                env.render()
             a = actor.choose_action(s)
+            # print(a, onehot(a))
             s_, r, done, info = env.step(a)
             track_r.append(r)
             # x, x_dot, theta, theta_dot = s_
             # r1 = (env.x_threshold - abs(x))/env.x_threshold - 0.8
             # r2 = (env.theta_threshold_radians - abs(theta))/env.theta_threshold_radians - 0.5
             # r = r1 + r2
-            step_record.append(a)
+            step_record.append(onehot(a))
             # KNN_BASED_REALTIME_REWARD_SHAPING
-            if(knn.memory_size <= knn.count):
-                if(t < knn.minus_stepnum and t >= 10):
-                    po_s = 0.9*critic.value(s_) - critic.value(s)
-                    r += knn.predict(t, step_record) + po_s
+            # if(knn.memory_size <= knn.count):
+            #     if(t < knn.minus_stepnum - 1 and t >= 8):
+            #         po_s = 0.9*critic.value(s_) - critic.value(s)
+            #         predict = knn.predict_modified(t, step_record)
+            #         r += 0.8*(predict + po_s)
+
             # PBRS
-            # if(i_episode > 30):
-            #     r += 0.9*critic.value(s_) - critic.value(s)
+            # if(i_episode > 5):
+            # r += 0.9*critic.value(s_) - critic.value(s)
             if t >= MAX_EP_STEPS: r = 1
             if done: r = -1
+            # r += 0.9*critic.value(s_) - critic.value(s)
             # meta
             error = critic.errorfortd(s, r, s_)
             tde = float(error)
@@ -354,7 +342,6 @@ def trian():
             # actor.lr_v = abs(np.exp(r/10)-1)
 
 #             print('state', s, 's value', critic.value(s), 's_ value', critic.value(s_), 'td_error', tde)
-
             td_error = critic.learn(s, r, s_)
             actor.learn(s, a, td_error)
 
@@ -381,6 +368,7 @@ def trian():
                 print("episode:", i_episode, "  reward:", int(running_reward), 'paramter', actor.lr_v)
                 reward.append(running_reward)
                 record.append(ep_rs_sum)
+                # repeat = repeat / 2
 #                 critic.lr_v = 0.1
                 break
 #             print('------------------')
@@ -390,9 +378,9 @@ def trian():
             # print(task_avg)
             if(task_avg >= 195):
                 print('game task finish in :', i_episode, task_avg)
-#                 success = True
+                # success = True
                 actor.lr_v = 1e-5
-                break
+                # break
 
     running_reward_label = 1
 
@@ -404,7 +392,7 @@ trian()
 # plt.sca(ax1)
 # plt.plot(range(1, len(record) + 1), record)
 # plt.sca(ax2)
-# np.save('AC_with_reward_model', reward)
+np.save('v2_PBRS_AC', reward)
 
 plt.plot(range(1, len(reward) + 1), reward)
 
