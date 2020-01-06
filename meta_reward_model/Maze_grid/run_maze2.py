@@ -6,7 +6,7 @@ import numpy as np
 from knn_reward_model import KNN_Predict
 
 MEMORY_SIZE = 20000
-epsilon = 100
+epsilon = 10000
 sess = tf.Session()
 np.random.seed(1)
 tf.set_random_seed(1)
@@ -18,7 +18,7 @@ with tf.variable_scope('natural_DQN'):
         replace_target_iter=200
         # e_greedy_increment=0.0001
     )
-knn = KNN_Predict(10)
+knn = KNN_Predict(2)
 times = []
 real = []
 
@@ -41,24 +41,33 @@ def train(RL, model=False):
         state_record = []
         # state_record = check_append(state_record, ob)
         while True:
+            # if knn.suptrain:
+            #     action = knn.get_sup_action(t)
+            # else:
             action = RL.choose_action(np.array(ob))
             ob_, r, done = env.step(action)
             # print(ob, ob_)
             state_record.append(action)
             # state_record = check_append(state_record, ob_)
-            r_r = r
             if model:
-                tp = len(state_record) - 1
+                # tp = len(state_record) - 1
                 if(knn.memory_size <= knn.count):
-                    if(tp < knn.minus_stepnum and  tp >= 5):
-                        po_s = 0.9*RL.qtarget_value(np.array(ob_)) - RL.qeval_value(np.array(ob), action)
-                        r += knn.predict(tp, state_record) + 0.3*po_s
+                    if(t >= 5 and t < knn.max_stepnum):
+                        po_s = 0.9*RL.qtarget_value(np.array(ob_)) - RL.qeval_value(np.array(ob))
+                        r += knn.predict_modified(t, state_record) + 0.3*po_s
             # if i_epsilon > 3:
-            #     po_s = 0.9*RL.qtarget_value(np.array(ob_)) - RL.qeval_value(np.array(ob), action)
-            #     r += po_s
-            RL.store_transition(ob, action, r, ob_)
+            po_s = 0.9*RL.qtarget_value(np.array(ob_)) - RL.qeval_value(np.array(ob))
+            # r += po_s
+            # if done:
+            #     r = 1
+            r_r = r
+            if knn.suptrain:
+                r = 1*0.99**t
+                RL.store_transition_maml(ob, action, r, ob_)
+            else:
+                RL.store_transition(ob, action, r, ob_)
             if(step > RL.memory_size):
-                RL.learn()
+                RL.learn(knn.suptrain)
             if done:
                 if(first != 0):
                     time = int(0.9*time + 0.1*t)
@@ -87,7 +96,7 @@ env.destroy()
 import matplotlib.pyplot as plt
 #
 # np.save('maze_dqn_PBRS', times)
-# np.save('maze_dqn_PBRS_real', real)
+# np.save('PBRS_500_times', times)
 
 
 plt.plot(range(1, len(times) + 1), times)

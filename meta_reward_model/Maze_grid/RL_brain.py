@@ -35,7 +35,7 @@ class DeepQNetwork:
 
         # initialize zero memory [s, a, r, s_]
         self.memory = np.zeros((self.memory_size, n_features * 2 + 2))
-
+        self.memory_best = np.zeros((200, n_features * 2 + 2))
         # consist of [target_net, evaluate_net]
         self._build_net()
         t_params = tf.get_collection('target_net_params')
@@ -109,6 +109,18 @@ class DeepQNetwork:
 
         self.memory_counter += 1
 
+    def store_transition_maml(self, s, a, r, s_):
+        if not hasattr(self, 'memory_counter_maml'):
+            self.memory_counter_maml = 0
+
+        transition = np.hstack((s, [a, r], s_))
+
+        # replace the old memory with new memory
+        index = self.memory_counter_maml % 200
+        self.memory[index, :] = transition
+
+        self.memory_counter_maml += 1
+
     def choose_action(self, observation):
         # to have batch dimension when feed into tf placeholder
         observation = observation[np.newaxis, :]
@@ -122,52 +134,38 @@ class DeepQNetwork:
         return action
 
     def learn(self):
-        # check to replace target parameters
         if self.learn_step_counter % self.replace_target_iter == 0:
             self.sess.run(self.replace_target_op)
-            # print('\ntarget_params_replaced\n')
-
-        # sample batch memory from all memory
         if self.memory_counter > self.memory_size:
             sample_index = np.random.choice(self.memory_size, size=self.batch_size)
         else:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
         batch_memory = self.memory[sample_index, :]
-
         q_next, q_eval = self.sess.run(
             [self.q_next, self.q_eval],
             feed_dict={
-                self.s_: batch_memory[:, -self.n_features:],  # fixed params
-                self.s: batch_memory[:, :self.n_features],  # newest params
+                self.s_: batch_memory[:, -self.n_features:],
+                self.s: batch_memory[:, :self.n_features],
             })
-
-        # change q_target w.r.t q_eval's action
         q_target = q_eval.copy()
-
         batch_index = np.arange(self.batch_size, dtype=np.int32)
         eval_act_index = batch_memory[:, self.n_features].astype(int)
         reward = batch_memory[:, self.n_features + 1]
-
         q_target[batch_index, eval_act_index] = reward + self.gamma * np.max(q_next, axis=1)
-
-
-        # train eval network
         _, self.cost = self.sess.run([self._train_op, self.loss],
                                      feed_dict={self.s: batch_memory[:, :self.n_features],
                                                 self.q_target: q_target})
         self.cost_his.append(self.cost)
-
-        # increasing epsilon
         self.epsilon = self.epsilon + self.epsilon_increment if self.epsilon < self.epsilon_max else self.epsilon_max
         self.learn_step_counter += 1
 
-    def qeval_value(self, s, a):
+    def qeval_value(self, s):
         s = s[np.newaxis, :]
         q_value = self.sess.run(self.q_eval, {self.s: s})
         # print(q_value)
         # if q_value[0][a] == np.max(q_value):
         #     print('???????????')
-        return q_value[0][a]
+        return np.max(q_value)
     def qtarget_value(self, s):
         s = s[np.newaxis, :]
         q_value = self.sess.run(self.q_next, {self.s_: s})
