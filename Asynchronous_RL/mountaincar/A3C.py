@@ -15,13 +15,13 @@ GAME = 'MountainCar-v0'
 OUTPUT_GRAPH = False
 LOG_DIR = './log'
 N_WORKERS = multiprocessing.cpu_count()
-# print(N_WORKERS)
-MAX_GLOBAL_EP = 10
+MAX_STEP = 2000
+MAX_GLOBAL_EP = 400
 GLOBAL_NET_SCOPE = 'Global_Net'
 # UPDATE_GLOBAL_ITER = 10
-GAMMA = 0.9
+GAMMA = 0.99
 ENTROPY_BETA = 0.1
-LR_A = 0.001    # learning rate for actor
+LR_A = 0.01    # learning rate for actor
 LR_C = 0.01    # learning rate for critic
 GLOBAL_RUNNING_R = []
 GLOBAL_EP = 0
@@ -74,10 +74,10 @@ class ACNet(object):
     def _build_net(self, scope):
         w_init = tf.random_normal_initializer(0., .1)
         with tf.variable_scope('actor'):
-            l_a = tf.layers.dense(self.s, 128, tf.nn.relu6, kernel_initializer=w_init, name='la')
+            l_a = tf.layers.dense(self.s, 200, tf.nn.relu6, kernel_initializer=w_init, name='la')
             a_prob = tf.layers.dense(l_a, N_A, tf.nn.softmax, kernel_initializer=w_init, name='ap')
         with tf.variable_scope('critic'):
-            l_c = tf.layers.dense(self.s, 128, tf.nn.relu6, kernel_initializer=w_init, name='lc')
+            l_c = tf.layers.dense(self.s, 100, tf.nn.relu6, kernel_initializer=w_init, name='lc')
             v = tf.layers.dense(l_c, 1, kernel_initializer=w_init, name='v')  # state value
         a_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
         c_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/critic')
@@ -106,33 +106,27 @@ class Worker(object):
         global GLOBAL_RUNNING_R, GLOBAL_EP
         total_step = 1
         buffer_s, buffer_a, buffer_r, buffer_v_target = [], [], [], []
-        # while not COORD.should_stop() and GLOBAL_EP < MAX_GLOBAL_EP:
         s = self.env.reset()
-        step = 1
+        step = 0
         while True:
-            # if self.name == 'W_0':
-            #     print('??????')
-            #     self.env.render()
-            # print(self.name)
             a = self.AC.choose_action(s)
             s_, r, done, info = self.env.step(a)
-            # if done:
-            #     r = +5
-            # else:
-            r = (r + 8)/8
-            step += r
+            if done:
+                r = +100
+            else:
+                r = 0
+            step += 1
             buffer_s.append(s)
             buffer_a.append(a)
             buffer_r.append(r)
 
-            if done:   # update global and assign to local net
+            if done or step > MAX_STEP - 1:   # update global and assign to local net
                 if w:
                     if done:
                         v_s_ = 0   # terminal
                     else:
                         v_s_ = SESS.run(self.AC.v, {self.AC.s: s_[np.newaxis, :]})[0, 0]
-                    # buffer_v_target = []
-                    for r in buffer_r[::-1]:    # reverse buffer r
+                    for r in buffer_r[::-1]:
                         v_s_ = r + GAMMA * v_s_
                         buffer_v_target.append(v_s_)
                     buffer_v_target.reverse()
@@ -144,18 +138,14 @@ class Worker(object):
                         self.AC.v_target: buffer_v_target,
                     }
                     self.AC.update_global(feed_dict)
-                    # print(self.name, ':', ep_r)
                     self.AC.pull_global()
-                    # print(self.name, 'is finish, and total rewards are:', ep_r)
+                    if done:
+                        print(self.name, 'is success to climb the hill')
+                    if self.name == 'W_0':
+                        GLOBAL_RUNNING_R.append(step)
+                        print('main agent:', step)
                 else:
-                    # if len(GLOBAL_RUNNING_R) == 0:  # record running episode reward
-                    #     GLOBAL_RUNNING_R.append(ep_r)
-                    # else:
-                    #     GLOBAL_RUNNING_R.append(0.9 * GLOBAL_RUNNING_R[-1] + 0.1 * ep_r)
-                    # print(
-                    #     "main agent:", int(GLOBAL_RUNNING_R[-1]),
-                    #       )
-                    print('main agent steps:', step)
+                    print('main agent:', step)
                     GLOBAL_RUNNING_R.append(step)
                 buffer_s, buffer_a, buffer_r, buffer_v_target = [], [], [], []
                 break
@@ -163,8 +153,6 @@ class Worker(object):
             s = s_
     def update(self):
         self.AC.pull_global()
-    # def t(self):
-
 
 
 if __name__ == "__main__":
@@ -180,14 +168,9 @@ if __name__ == "__main__":
         i_name = 'W_%i' % i   # worker name
         workers.append(Worker(i_name, GLOBAL_AC))
 
-    m = Worker('main', GLOBAL_AC)
+    # m = Worker('main', GLOBAL_AC)
     COORD = tf.train.Coordinator()
     SESS.run(tf.global_variables_initializer())
-
-    # if OUTPUT_GRAPH:
-    #     if os.path.exists(LOG_DIR):
-    #         shutil.rmtree(LOG_DIR)
-    #     tf.summary.FileWriter(LOG_DIR, SESS.graph)
 
     for x in tqdm(range(MAX_GLOBAL_EP)):
         worker_threads = []
@@ -198,14 +181,14 @@ if __name__ == "__main__":
             worker_threads.append(t)
         COORD.join(worker_threads)
         # GLOBAL_EP += 1
-        m.update()
-        # print('main player coming')
-        m.work(w=False)
+        # m.update()
+        # # print('main player coming')
+        # m.work(w=False)
         print('finish a round')
 
-    # np.save('normal_A3C_200', GLOBAL_RUNNING_R)
+    np.save('A3C_400_mc4', GLOBAL_RUNNING_R)
 
     plt.plot(np.arange(len(GLOBAL_RUNNING_R)), GLOBAL_RUNNING_R)
-    plt.xlabel('step')
-    plt.ylabel('Total moving reward')
+    plt.xlabel('episode')
+    plt.ylabel('Total step')
     plt.show()

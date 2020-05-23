@@ -15,14 +15,14 @@ GAME = 'MountainCar-v0'
 OUTPUT_GRAPH = False
 LOG_DIR = './log'
 N_WORKERS = multiprocessing.cpu_count()
-# print(N_WORKERS)
-MAX_GLOBAL_EP = 200
+MAX_STEP = 2000
+MAX_GLOBAL_EP = 400
 GLOBAL_NET_SCOPE = 'Global_Net'
 # UPDATE_GLOBAL_ITER = 10
-GAMMA = 0.9
-ENTROPY_BETA = 0.0001
-LR_A = 0.001    # learning rate for actor
-LR_C = 0.001    # learning rate for critic
+GAMMA = 0.99
+ENTROPY_BETA = 0.1
+LR_A = 0.01    # learning rate for actor
+LR_C = 0.01    # learning rate for critic
 GLOBAL_RUNNING_R = []
 GLOBAL_EP = 0
 GLOBAL_ES_fail = []
@@ -77,10 +77,10 @@ class ACNet(object):
     def _build_net(self, scope):
         w_init = tf.random_normal_initializer(0., .1)
         with tf.variable_scope('actor'):
-            l_a = tf.layers.dense(self.s, 256, tf.nn.relu6, kernel_initializer=w_init, name='la')
+            l_a = tf.layers.dense(self.s, 200, tf.nn.relu6, kernel_initializer=w_init, name='la')
             a_prob = tf.layers.dense(l_a, N_A, tf.nn.softmax, kernel_initializer=w_init, name='ap')
         with tf.variable_scope('critic'):
-            l_c = tf.layers.dense(self.s, 128, tf.nn.relu6, kernel_initializer=w_init, name='lc')
+            l_c = tf.layers.dense(self.s, 100, tf.nn.relu6, kernel_initializer=w_init, name='lc')
             v = tf.layers.dense(l_c, 1, kernel_initializer=w_init, name='v')  # state value
         a_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/actor')
         c_params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope + '/critic')
@@ -112,34 +112,35 @@ class Worker(object):
         # while not COORD.should_stop() and GLOBAL_EP < MAX_GLOBAL_EP:
         if not COORD.should_stop():
             s = self.env.reset()
-            ep_r = 0
+            step = 0
             while True:
                 global GLOBAL_ES_fail, GLOBAL_EXCHANGE
-
                 a = self.AC.choose_action(s)
                 s_, r, done, info = self.env.step(a)
                 if done:
-                    r = -1
-                ep_r += r
+                    r = +100
+                else:
+                    r = 0
+                step += 1
                 self.buffer_s.append(s)
                 self.buffer_a.append(a)
                 self.buffer_r.append(r)
-
-                if done:    #tell all the agent to learn this fail experience
+                if done:    #As without the fail experience, so we store the success experience
                     pre = 0
-                    for i in range(5):
+                    for i in range(15):
                         i = - (i + 1)
                         tmp = []
                         tmp.append(self.buffer_s[i])
                         tmp.append(self.buffer_a[i])
-                        tmp.append(self.buffer_r[i] + 0.9*pre)
-                        GLOBAL_ES_fail.append(tmp)
+                        vs = self.buffer_r[i] + GAMMA*pre
+                        tmp.append(vs)
+                        GLOBAL_ES_succ.append(tmp)
                         # pre = self.buffer_r[i]
-                        pre = self.buffer_r[i] + 0.9*pre
+                        pre = vs
                     GLOBAL_EXCHANGE = True
+                    print(self.name, 'agent is success to climb the hill with', step)
 
-                if done or ep_r > 199:   # update global and assign to local net
-                    # print('reward of done', r)
+                if done or step > MAX_STEP - 1:   # update global and assign to local net
                     if w:
                         if done:
                             v_s_ = 0   # terminal
@@ -151,62 +152,39 @@ class Worker(object):
                             self.buffer_v_target.append(v_s_)
                         self.buffer_v_target.reverse()
 
-                        buffer_s, buffer_a, buffer_v_target = np.vstack(self.buffer_s), np.array(self.buffer_a), np.vstack(self.buffer_v_target)
-                        feed_dict = {
-                            self.AC.s: buffer_s,
-                            self.AC.a_his: buffer_a,
-                            self.AC.v_target: buffer_v_target,
-                        }
-
-                        self.AC.update_global(feed_dict)
-                        # print(self.name, ':', ep_r)
-                        self.AC.pull_global()
+                        # buffer_s, buffer_a, buffer_v_target = np.vstack(self.buffer_s), np.array(self.buffer_a), np.vstack(self.buffer_v_target)
+                        # feed_dict = {
+                        #     self.AC.s: buffer_s,
+                        #     self.AC.a_his: buffer_a,
+                        #     self.AC.v_target: buffer_v_target,
+                        # }
+                        #
+                        # self.AC.update_global(feed_dict)
+                        # self.AC.pull_global()
                         # print(self.name, 'is finish')
+                        if self.name == 'W_0':
+                            GLOBAL_RUNNING_R.append(step)
+                            print('main agent:', step)
                     else:
-                        print('main agent:', ep_r)
-                        GLOBAL_RUNNING_R.append(ep_r)
-                    if not GLOBAL_EXCHANGE:
-                        self.buffer_s, self.buffer_a, self.buffer_r, self.buffer_v_target = [], [], [], []
+                        print('main agent:', step)
+                        GLOBAL_RUNNING_R.append(step)
+                    # if not GLOBAL_EXCHANGE:
+                    #     self.buffer_s, self.buffer_a, self.buffer_r, self.buffer_v_target = [], [], [], []
                     break
                 s = s_
 
     def update(self):
         self.AC.pull_global()
 
-    def solve_way(self):
-        global GLOBAL_ES_fail, GLOBAL_ES_succ
-        # problem = []
-        for i in GLOBAL_ES_fail:
-            if i[0] in np.array(self.buffer_s):
-                b_s = np.array(self.buffer_s)
-                index = np.where(b_s == i[0])[0][0]
-                # print('into', index, self.buffer_r[index])
-                if self.buffer_r[index] >= 0: # judge the success of the experience
-                    # for i in range(1):
-                    #     index = index - i
-                    #     tmp = []
-                    #     tmp.append(self.buffer_s[index])
-                    #     s_ = self.buffer_s[index]
-                    #     tmp.append(self.buffer_a[index])
-                    #     v_s_ = SESS.run(self.AC.v, {self.AC.s: s_[np.newaxis, :]})[0, 0]
-                    #     tmp.append(v_s_)
-                    #     GLOBAL_ES_succ.append(tmp)
-                    tmp = []
-                    tmp.append(self.buffer_s[index])
-                    s_ = self.buffer_s[index]
-                    tmp.append(self.buffer_a[index])
-                    v_s_ = SESS.run(self.AC.v, {self.AC.s: s_[np.newaxis, :]})[0, 0]
-                    tmp.append(v_s_)
-                    GLOBAL_ES_succ.append(tmp)
-
     def study(self):
-        global GLOBAL_ES_fail
-        bs, ba, btv = [], [], []
-        for item in GLOBAL_ES_fail:
-            bs.append(item[0])
-            ba.append(item[1])
-            btv.append(item[2])
-        buffer_s, buffer_a, buffer_v_target = np.vstack(bs), np.array(ba), np.vstack(btv)
+        global GLOBAL_ES_succ
+        # bs, ba, btv = [], [], []
+        if len(GLOBAL_ES_succ) > 0:
+            for item in GLOBAL_ES_succ:
+                self.buffer_s.append(item[0])
+                self.buffer_a.append(item[1])
+                self.buffer_v_target.append(item[2])
+        buffer_s, buffer_a, buffer_v_target = np.vstack(self.buffer_s), np.array(self.buffer_a), np.vstack(self.buffer_v_target)
         feed_dict = {
             self.AC.s: buffer_s,
             self.AC.a_his: buffer_a,
@@ -217,8 +195,6 @@ class Worker(object):
 
 if __name__ == "__main__":
     SESS = tf.Session()
-
-    # with tf.device("/cpu:0"):
     OPT_A = tf.train.RMSPropOptimizer(LR_A, name='RMSPropA')
     OPT_C = tf.train.RMSPropOptimizer(LR_C, name='RMSPropC')
     GLOBAL_AC = ACNet(GLOBAL_NET_SCOPE)  # we only need its params
@@ -228,7 +204,7 @@ if __name__ == "__main__":
         i_name = 'W_%i' % i   # worker name
         workers.append(Worker(i_name, GLOBAL_AC))
 
-    m = Worker('main', GLOBAL_AC)
+    # m = Worker('main', GLOBAL_AC)
     COORD = tf.train.Coordinator()
     SESS.run(tf.global_variables_initializer())
 
@@ -243,36 +219,22 @@ if __name__ == "__main__":
 
         #   discussion stage
         #   first: search the solved experience among all the agents
-        if GLOBAL_EXCHANGE:
-            discuss_threads = []
-            for worker in workers:
-                job = lambda: worker.solve_way()
-                t = threading.Thread(target=job)
-                t.start()
-                discuss_threads.append(t)
-            COORD.join(discuss_threads)
-        #   second: all the agent study the the question or solved experience
-        # if GLOBAL_EXCHANGE:
-            study_threads = []
-            if len(GLOBAL_ES_succ) > 0:
-                GLOBAL_ES_fail = GLOBAL_ES_fail + GLOBAL_ES_succ
-                print('learn success')
-            for worker in workers:
-                job = lambda: worker.study()
-                t = threading.Thread(target=job)
-                t.start()
-                study_threads.append(t)
-            COORD.join(study_threads)
-        GLOBAL_ES_fail = []
-        GLOBAL_ES_succ = []
-        GLOBAL_EXCHANGE = False
+        study_threads = []
+        for worker in workers:
+            job = lambda: worker.study()
+            t = threading.Thread(target=job)
+            t.start()
+            study_threads.append(t)
+        COORD.join(study_threads)
         # GLOBAL_EP += 1
-        m.update()
-        m.work(w=False)
-        print('finish a round')
+        # m.update()
+        # m.work(w=False)
+        GLOBAL_ES_succ = []
+        # GLOBAL_EXCHANGE = False
+        print('finish', x, 'round')
 
-    # np.save('test', GLOBAL_RUNNING_R)
+    np.save('EE_mc_400_step15', GLOBAL_RUNNING_R)
     plt.plot(np.arange(len(GLOBAL_RUNNING_R)), GLOBAL_RUNNING_R)
-    plt.xlabel('step')
-    plt.ylabel('Total reward')
+    plt.xlabel('episode')
+    plt.ylabel('Total steps')
     plt.show()
